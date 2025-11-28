@@ -3,4 +3,7 @@ tensorflow>=2.15.0
 numpy>=1.24.0
 scipy>=1.11.0
 librosa>=0.10.0
+sounddevice>=0.4.6
 jiwer>=2.5.0
+pyaudio>=0.2.11
+wave
