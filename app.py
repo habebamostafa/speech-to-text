@@ -9,14 +9,22 @@ import tempfile
 import os
 import time
 from jiwer import wer, cer
+import io
+import base64
 
-# محاولة استيراد مكتبات الصوت
+# محاولة استيراد مكتبات الصوت البديلة
 try:
-    import sounddevice as sd
-    from scipy.io import wavfile
-    AUDIO_AVAILABLE = True
-except ImportError as e:
-    AUDIO_AVAILABLE = False
+    import pyaudio
+    import wave
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
+
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
 
 # إعدادات الصفحة
 st.set_page_config(
@@ -129,17 +137,18 @@ with st.sidebar:
     st.divider()
     
     # إعدادات التسجيل
-    if AUDIO_AVAILABLE:
+    if PYAUDIO_AVAILABLE:
         st.header("🎙️ إعدادات التسجيل")
         st.session_state.duration = st.slider("مدة التسجيل (ثواني)", 1, 15, 5)
         st.session_state.sample_rate = st.selectbox("معدل العينات", [16000, 22050, 44100], index=0)
+        st.session_state.channels = st.selectbox("عدد القنوات", [1, 2], index=0)
     else:
         st.markdown('<div class="warning-box">', unsafe_allow_html=True)
         st.warning("""
-        **مكتبات الصوت غير متاحة**
+        **مكتبات التسجيل غير متاحة**
         
         للتسجيل من المايكروفون، تأكد من:
-        - تثبيت `sounddevice` و `scipy`
+        - تثبيت `pyaudio`
         - توصيل المايكروفون
         - منح الأذونات
         """)
@@ -225,45 +234,71 @@ def predict_from_audio(audio_path):
         st.error(f"❌ خطأ في التنبؤ: {e}")
         return None
 
-# دالة تسجيل الصوت
-def record_audio(duration=5, sample_rate=16000):
-    """تسجيل الصوت من الميكروفون"""
+# دالة تسجيل الصوت باستخدام PyAudio
+def record_audio_pyaudio(duration=5, sample_rate=16000, channels=1):
+    """تسجيل الصوت من الميكروفون باستخدام PyAudio"""
     try:
-        # إنشاء ملف مؤقت
+        # إعدادات التسجيل
+        chunk = 1024
+        format = pyaudio.paInt16
+        
+        # إنشاء كائن PyAudio
+        p = pyaudio.PyAudio()
+        
+        # فتح stream للتسجيل
+        stream = p.open(
+            format=format,
+            channels=channels,
+            rate=sample_rate,
+            input=True,
+            frames_per_buffer=chunk
+        )
+        
+        st.info("🎙️ جاري التسجيل... تكلم الآن!")
+        
+        frames = []
+        
+        # حساب عدد القطع المطلوبة
+        total_chunks = int((sample_rate / chunk) * duration)
+        
+        # شريط التقدم
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # التسجيل
+        for i in range(total_chunks):
+            data = stream.read(chunk)
+            frames.append(data)
+            
+            # تحديث شريط التقدم
+            progress = (i + 1) / total_chunks
+            progress_bar.progress(progress)
+            status_text.text(f"⏳ {int(progress * 100)}% - {i + 1}/{total_chunks}")
+        
+        # إيقاف التسجيل
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        # حفظ الملف المؤقت
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
         temp_filename = temp_file.name
         temp_file.close()
         
-        # التسجيل
-        recording = sd.rec(
-            int(duration * sample_rate),
-            samplerate=sample_rate,
-            channels=1,
-            dtype='int16'
-        )
+        # حفظ كملف WAV
+        wf = wave.open(temp_filename, 'wb')
+        wf.setnchannels(channels)
+        wf.setsampwidth(p.get_sample_size(format))
+        wf.setframerate(sample_rate)
+        wf.writeframes(b''.join(frames))
+        wf.close()
         
-        # عرض التقدم
-        progress_placeholder = st.empty()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i in range(duration):
-            time.sleep(1)
-            progress = (i + 1) / duration
-            progress_bar.progress(progress)
-            status_text.text(f"🎙️ جاري التسجيل... {i + 1}/{duration} ثانية")
-        
-        sd.wait()  # انتظار انتهاء التسجيل
-        
-        # حفظ الملف
-        wavfile.write(temp_filename, sample_rate, recording)
-        
-        progress_placeholder.empty()
-        progress_bar.empty()
-        status_text.empty()
-        
+        st.success("✅ تم التسجيل بنجاح!")
         return temp_filename
-    
+        
     except Exception as e:
         st.error(f"❌ خطأ في التسجيل: {e}")
         return None
@@ -276,12 +311,12 @@ if st.session_state.model is None:
     
     **لبدء الاستخدام، يرجى تحميل النموذج من الشريط الجانبي:**
     
-    1. **رفع النموذج**: ملف `.h5` أو `.keras`
+    1. **رفع النموذج**: ملف `my_model (1).h5`
     2. **رفع الإعدادات**: ملف `config.json` 
     3. **رفع المعالجات**: ملف `preprocessors.pkl`
     
     ### 📁 الملفات المطلوبة:
-    - `my_model.h5` - النموذج المدرب
+    - `my_model (1).h5` - النموذج المدرب
     - `config.json` - إعدادات المعالجة
     - `preprocessors.pkl` - معالجات النص
     """)
@@ -330,17 +365,25 @@ tab1, tab2, tab3 = st.tabs(["🎤 تسجيل من المايك", "📁 تحمي�
 with tab1:
     st.header("التسجيل المباشر من الميكروفون")
     
-    if not AUDIO_AVAILABLE:
+    if not PYAUDIO_AVAILABLE:
         st.markdown('<div class="warning-box">', unsafe_allow_html=True)
         st.error("""
         ## ❌ خاصية التسجيل غير متاحة
         
-        **لتمكين التسجيل من المايكروفون، تأكد من:**
-        - تثبيت المكتبات: `sounddevice` و `scipy`
-        - توصيل المايكروفون بشكل صحيح
-        - منح التطبيق صلاحية استخدام المايكروفون
+        **لتمكين التسجيل من المايكروفون:**
         
-        **حل بديل:** يمكنك استخدام تبويب "تحميل ملف صوتي" لرفع تسجيلات جاهزة
+        **على Windows:**
+        ```bash
+        pip install pipwin
+        pipwin install pyaudio
+        ```
+        
+        **على Mac/Linux:**
+        ```bash
+        pip install pyaudio
+        ```
+        
+        **بديل فوري:** استخدم تبويب "تحميل ملف صوتي" لرفع تسجيلات جاهزة
         """)
         st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -351,29 +394,42 @@ with tab1:
             st.subheader("🎙️ التحكم في التسجيل")
             
             if st.button("⏺️ بدء التسجيل", use_container_width=True, type="primary"):
-                with st.spinner("جاري التحضير للتسجيل..."):
-                    audio_file = record_audio(
+                with st.spinner("جاري إعداد التسجيل..."):
+                    audio_file = record_audio_pyaudio(
                         duration=st.session_state.duration,
-                        sample_rate=st.session_state.sample_rate
+                        sample_rate=st.session_state.sample_rate,
+                        channels=st.session_state.channels
                     )
                     
                     if audio_file:
                         st.session_state.recorded_audio = audio_file
-                        st.success("✅ تم التسجيل بنجاح!")
                         st.rerun()
             
             # عرض التسجيل إذا موجود
             if st.session_state.recorded_audio:
                 st.audio(st.session_state.recorded_audio, format='audio/wav')
                 
-                if st.button("🔍 تحليل التسجيل", use_container_width=True):
-                    with st.spinner("جاري التعرف على الكلام..."):
-                        prediction = predict_from_audio(st.session_state.recorded_audio)
-                        
-                        if prediction:
-                            st.session_state.last_prediction = prediction
-                            st.success("✅ تم التحليل بنجاح!")
+                col_btn1, col_btn2 = st.columns(2)
+                
+                with col_btn1:
+                    if st.button("🔍 تحليل التسجيل", use_container_width=True):
+                        with st.spinner("جاري التعرف على الكلام..."):
+                            prediction = predict_from_audio(st.session_state.recorded_audio)
+                            
+                            if prediction:
+                                st.session_state.last_prediction = prediction
+                                st.success("✅ تم التحليل بنجاح!")
+                                st.rerun()
+                
+                with col_btn2:
+                    if st.button("🗑️ مسح التسجيل", use_container_width=True):
+                        try:
+                            os.unlink(st.session_state.recorded_audio)
+                            st.session_state.recorded_audio = None
+                            st.session_state.last_prediction = ""
                             st.rerun()
+                        except:
+                            pass
             
             st.markdown('</div>', unsafe_allow_html=True)
         
@@ -383,6 +439,14 @@ with tab1:
                 st.markdown('<div class="result-box">', unsafe_allow_html=True)
                 st.success("**النص المتوقع:**")
                 st.write(st.session_state.last_prediction)
+                
+                # إحصاءات النص
+                text_length = len(st.session_state.last_prediction)
+                word_count = len(st.session_state.last_prediction.split())
+                
+                st.metric("عدد الحروف", text_length)
+                st.metric("عدد الكلمات", word_count)
+                
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.info("👆 سجل صوتاً أولاً ثم اضغط على تحليل التسجيل")
@@ -421,6 +485,17 @@ with tab2:
                     st.markdown('<div class="result-box">', unsafe_allow_html=True)
                     st.subheader("📝 النص المتوقع:")
                     st.write(prediction)
+                    
+                    # إحصاءات النص
+                    text_length = len(prediction)
+                    word_count = len(prediction.split())
+                    
+                    col_stat1, col_stat2 = st.columns(2)
+                    with col_stat1:
+                        st.metric("عدد الحروف", text_length)
+                    with col_stat2:
+                        st.metric("عدد الكلمات", word_count)
+                    
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 # تنظيف الملف المؤقت
@@ -491,10 +566,11 @@ with st.expander("ℹ️ معلومات عن النظام"):
     st.markdown("""
     ### 🎯 ميزات النظام:
     - ✅ تحميل النموذج الحقيقي المدرب
-    - ✅ التسجيل المباشر من الميكروفون
+    - ✅ التسجيل المباشر من الميكروفون (PyAudio)
     - ✅ تحليل ملفات صوتية مرفوعة  
     - ✅ تقييم دقة النموذج
     - ✅ واجهة عربية كاملة
+    - ✅ إحصاءات النص تلقائياً
     
     ### 💡 نصائح للحصول على أفضل النتائج:
     1. **استخدم ميكروفون جيد** النوعية
@@ -505,16 +581,16 @@ with st.expander("ℹ️ معلومات عن النظام"):
     
     ### 🔧 المكتبات المستخدمة:
     - TensorFlow 2.15+ للنموذج
-    - SoundDevice للتسجيل
-    - SciPy للمعالجة
+    - PyAudio للتسجيل (بدون PortAudio مشاكل)
     - Streamlit للواجهة
+    - SciPy للمعالجة
     """)
 
 # تذييل الصفحة
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎤 نظام التعرف على الكلام - يعمل بالمكتبات المطلوبة فقط 🚀"
+    "🎤 نظام التعرف على الكلام - يعمل بـ PyAudio بدون مشاكل 🚀"
     "</div>",
     unsafe_allow_html=True
 )
