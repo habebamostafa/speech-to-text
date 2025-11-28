@@ -9,22 +9,14 @@ import tempfile
 import os
 import time
 from jiwer import wer, cer
-import io
-import base64
 
-# محاولة استيراد مكتبات الصوت البديلة
+# محاولة استيراد مكتبات الصوت
 try:
     import pyaudio
     import wave
     PYAUDIO_AVAILABLE = True
 except ImportError:
     PYAUDIO_AVAILABLE = False
-
-try:
-    import librosa
-    LIBROSA_AVAILABLE = True
-except ImportError:
-    LIBROSA_AVAILABLE = False
 
 # إعدادات الصفحة
 st.set_page_config(
@@ -63,96 +55,55 @@ st.markdown("""
         border-left: 4px solid #0c5460;
         margin: 10px 0;
     }
-    .warning-box {
-        background-color: #ffeaa7;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #fdcb6e;
-        margin: 10px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # العنوان الرئيسي
 st.markdown('<h1 class="main-header">🎤 نظام التعرف على الكلام - النموذج الحقيقي</h1>', unsafe_allow_html=True)
 
-# تهيئة حالة الجلسة
+# تحميل النموذج تلقائياً عند التشغيل
+@st.cache_resource
+def load_model_and_config():
+    """تحميل النموذج والإعدادات تلقائياً"""
+    try:
+        # تحميل النموذج
+        model = keras.models.load_model('my_model (1).h5', compile=False)
+        
+        # تحميل الإعدادات
+        with open('config.json', 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # تحميل المعالجات
+        with open('preprocessors.pkl', 'rb') as f:
+            preprocessors = pickle.load(f)
+            char_to_num = preprocessors.get('char_to_num')
+            num_to_char = preprocessors.get('num_to_char')
+        
+        return model, config, char_to_num, num_to_char
+        
+    except Exception as e:
+        st.error(f"❌ خطأ في تحميل النموذج: {e}")
+        return None, None, None, None
+
+# تحميل النموذج تلقائياً
 if 'model' not in st.session_state:
-    st.session_state.model = None
-if 'config' not in st.session_state:
-    st.session_state.config = None
-if 'char_to_num' not in st.session_state:
-    st.session_state.char_to_num = None
-if 'num_to_char' not in st.session_state:
-    st.session_state.num_to_char = None
+    with st.spinner("🔄 جاري تحميل النموذج والإعدادات..."):
+        model, config, char_to_num, num_to_char = load_model_and_config()
+        
+        if model is not None:
+            st.session_state.model = model
+            st.session_state.config = config
+            st.session_state.char_to_num = char_to_num
+            st.session_state.num_to_char = num_to_char
+            st.session_state.model_loaded = True
+        else:
+            st.session_state.model_loaded = False
+
+# تهيئة حالة الجلسة
 if 'last_prediction' not in st.session_state:
     st.session_state.last_prediction = ""
 if 'recorded_audio' not in st.session_state:
     st.session_state.recorded_audio = None
-
-# الشريط الجانبي
-with st.sidebar:
-    st.header("⚙️ تحميل النموذج")
-    
-    # تحميل النموذج
-    uploaded_model = st.file_uploader("رفع النموذج (.h5 أو .keras)", type=['h5', 'keras'])
-    uploaded_config = st.file_uploader("رفع ملف الإعدادات (.json)", type=['json'])
-    uploaded_preprocessors = st.file_uploader("رفع ملف المعالجات (.pkl)", type=['pkl'])
-    
-    if st.button("🔄 تحميل النموذج", use_container_width=True):
-        if uploaded_model and uploaded_config and uploaded_preprocessors:
-            with st.spinner("جاري تحميل النموذج..."):
-                try:
-                    # حفظ الملفات المؤقتة
-                    model_path = tempfile.NamedTemporaryFile(delete=False, suffix='.h5').name
-                    with open(model_path, 'wb') as f:
-                        f.write(uploaded_model.getvalue())
-                    
-                    # تحميل النموذج
-                    model = keras.models.load_model(model_path, compile=False)
-                    st.session_state.model = model
-                    
-                    # تحميل الإعدادات
-                    config = json.load(uploaded_config)
-                    st.session_state.config = config
-                    
-                    # تحميل المعالجات
-                    preprocessors = pickle.load(uploaded_preprocessors)
-                    st.session_state.char_to_num = preprocessors.get('char_to_num')
-                    st.session_state.num_to_char = preprocessors.get('num_to_char')
-                    
-                    st.success("✅ تم تحميل النموذج بنجاح!")
-                    
-                    # تنظيف الملف المؤقت
-                    try:
-                        os.unlink(model_path)
-                    except:
-                        pass
-                    
-                except Exception as e:
-                    st.error(f"❌ خطأ في تحميل النموذج: {e}")
-        else:
-            st.error("⚠️ يرجى رفع جميع الملفات المطلوبة")
-    
-    st.divider()
-    
-    # إعدادات التسجيل
-    if PYAUDIO_AVAILABLE:
-        st.header("🎙️ إعدادات التسجيل")
-        st.session_state.duration = st.slider("مدة التسجيل (ثواني)", 1, 15, 5)
-        st.session_state.sample_rate = st.selectbox("معدل العينات", [16000, 22050, 44100], index=0)
-        st.session_state.channels = st.selectbox("عدد القنوات", [1, 2], index=0)
-    else:
-        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
-        st.warning("""
-        **مكتبات التسجيل غير متاحة**
-        
-        للتسجيل من المايكروفون، تأكد من:
-        - تثبيت `pyaudio`
-        - توصيل المايكروفون
-        - منح الأذونات
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
 
 # دوال المعالجة الصوتية
 def process_audio_file(audio_path):
@@ -304,60 +255,44 @@ def record_audio_pyaudio(duration=5, sample_rate=16000, channels=1):
         return None
 
 # المحتوى الرئيسي
-if st.session_state.model is None:
-    st.markdown('<div class="success-box">', unsafe_allow_html=True)
-    st.info("""
-    ## 🎯 مرحباً بك في نظام التعرف على الكلام الحقيقي!
+if not st.session_state.get('model_loaded', False):
+    st.error("""
+    ❌ **لم يتم تحميل النموذج بنجاح**
     
-    **لبدء الاستخدام، يرجى تحميل النموذج من الشريط الجانبي:**
-    
-    1. **رفع النموذج**: ملف `my_model (1).h5`
-    2. **رفع الإعدادات**: ملف `config.json` 
-    3. **رفع المعالجات**: ملف `preprocessors.pkl`
-    
-    ### 📁 الملفات المطلوبة:
+    **تأكد من وجود هذه الملفات في نفس المجلد:**
     - `my_model (1).h5` - النموذج المدرب
-    - `config.json` - إعدادات المعالجة
+    - `config.json` - إعدادات المعالجة  
     - `preprocessors.pkl` - معالجات النص
+    
+    **طريقة الحل:**
+    1. تأكد أن الملفات موجودة في نفس مجلد التطبيق
+    2. تأكد أن أسماء الملفات مطابقة تماماً
+    3. جدد تحميل الصفحة
     """)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # أمثلة على إنشاء الملفات
-    with st.expander("🛠️ كيفية إنشاء الملفات المطلوبة"):
-        st.markdown("""
-        **من كود التدريب، احفظ هذه الملفات:**
-        
-        ```python
-        # حفظ النموذج
-        model.save('my_model.h5')
-        
-        # حفظ الإعدادات
-        import json
-        config = {
-            'frame_length': 256,
-            'frame_step': 160,
-            'fft_length': 384
-        }
-        with open('config.json', 'w') as f:
-            json.dump(config, f)
-        
-        # حفظ المعالجات
-        import pickle
-        preprocessors = {
-            'char_to_num': char_to_num,
-            'num_to_char': num_to_char
-        }
-        with open('preprocessors.pkl', 'wb') as f:
-            pickle.dump(preprocessors, f)
-        ```
-        """)
-    
     st.stop()
 
 # عرض معلومات النموذج
-st.success(f"✅ النموذج محمل وجاهز للاستخدام!")
+st.success("✅ النموذج محمل وجاهز للاستخدام!")
 config = st.session_state.config
-st.info(f"**إعدادات النموذج:** Frame Length: {config.get('frame_length', 'N/A')} | Frame Step: {config.get('frame_step', 'N/A')} | FFT Length: {config.get('fft_length', 'N/A')}")
+st.info(f"**إعدادات النموذج:** Frame Length: {config.get('frame_length')} | Frame Step: {config.get('frame_step')} | FFT Length: {config.get('fft_length')}")
+
+# الشريط الجانبي للإعدادات
+with st.sidebar:
+    st.header("⚙️ إعدادات التسجيل")
+    
+    if PYAUDIO_AVAILABLE:
+        duration = st.slider("مدة التسجيل (ثواني)", 1, 15, 5)
+        sample_rate = st.selectbox("معدل العينات", [16000, 22050, 44100], index=0)
+        channels = st.selectbox("عدد القنوات", [1, 2], index=0)
+    else:
+        st.error("""
+        ❌ **PyAudio غير مثبت**
+        
+        للتسجيل من المايكروفون:
+        ```bash
+        pip install pyaudio
+        ```
+        """)
 
 # تبويبات الواجهة
 tab1, tab2, tab3 = st.tabs(["🎤 تسجيل من المايك", "📁 تحميل ملف صوتي", "📊 تقييم الأداء"])
@@ -366,7 +301,6 @@ with tab1:
     st.header("التسجيل المباشر من الميكروفون")
     
     if not PYAUDIO_AVAILABLE:
-        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
         st.error("""
         ## ❌ خاصية التسجيل غير متاحة
         
@@ -385,7 +319,6 @@ with tab1:
         
         **بديل فوري:** استخدم تبويب "تحميل ملف صوتي" لرفع تسجيلات جاهزة
         """)
-        st.markdown('</div>', unsafe_allow_html=True)
     else:
         col1, col2 = st.columns([1, 1])
         
@@ -396,9 +329,9 @@ with tab1:
             if st.button("⏺️ بدء التسجيل", use_container_width=True, type="primary"):
                 with st.spinner("جاري إعداد التسجيل..."):
                     audio_file = record_audio_pyaudio(
-                        duration=st.session_state.duration,
-                        sample_rate=st.session_state.sample_rate,
-                        channels=st.session_state.channels
+                        duration=duration,
+                        sample_rate=sample_rate,
+                        channels=channels
                     )
                     
                     if audio_file:
@@ -424,7 +357,8 @@ with tab1:
                 with col_btn2:
                     if st.button("🗑️ مسح التسجيل", use_container_width=True):
                         try:
-                            os.unlink(st.session_state.recorded_audio)
+                            if st.session_state.recorded_audio and os.path.exists(st.session_state.recorded_audio):
+                                os.unlink(st.session_state.recorded_audio)
                             st.session_state.recorded_audio = None
                             st.session_state.last_prediction = ""
                             st.rerun()
@@ -444,8 +378,11 @@ with tab1:
                 text_length = len(st.session_state.last_prediction)
                 word_count = len(st.session_state.last_prediction.split())
                 
-                st.metric("عدد الحروف", text_length)
-                st.metric("عدد الكلمات", word_count)
+                col_stat1, col_stat2 = st.columns(2)
+                with col_stat1:
+                    st.metric("عدد الحروف", text_length)
+                with col_stat2:
+                    st.metric("عدد الكلمات", word_count)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -565,7 +502,7 @@ with tab3:
 with st.expander("ℹ️ معلومات عن النظام"):
     st.markdown("""
     ### 🎯 ميزات النظام:
-    - ✅ تحميل النموذج الحقيقي المدرب
+    - ✅ تحميل النموذج تلقائياً من الملفات
     - ✅ التسجيل المباشر من الميكروفون (PyAudio)
     - ✅ تحليل ملفات صوتية مرفوعة  
     - ✅ تقييم دقة النموذج
@@ -578,19 +515,13 @@ with st.expander("ℹ️ معلومات عن النظام"):
     3. **تحدث بوضوح** وبطء معتدل
     4. **استخدم معدل عينات 16kHz** للأفضل
     5. **تجنب الصدى** والضوضاء الخلفية
-    
-    ### 🔧 المكتبات المستخدمة:
-    - TensorFlow 2.15+ للنموذج
-    - PyAudio للتسجيل (بدون PortAudio مشاكل)
-    - Streamlit للواجهة
-    - SciPy للمعالجة
     """)
 
 # تذييل الصفحة
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎤 نظام التعرف على الكلام - يعمل بـ PyAudio بدون مشاكل 🚀"
+    "🎤 نظام التعرف على الكلام - النموذج محمل تلقائياً 🚀"
     "</div>",
     unsafe_allow_html=True
 )
