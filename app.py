@@ -4,19 +4,13 @@ from tensorflow import keras
 import numpy as np
 import tempfile
 import os
-import io
-from scipy.io import wavfile
+import base64
 
-# Page settings
-st.set_page_config(
-    page_title="Speech Recognition System",
-    page_icon="🎤",
-    layout="wide"
-)
+st.set_page_config(page_title="Speech Recognition", page_icon="🎤", layout="wide")
 
 st.title("🎤 Speech Recognition System")
 
-# Load model
+# Load model (same as before)
 @st.cache_resource
 def load_model():
     try:
@@ -35,32 +29,26 @@ def load_model():
         model = keras.models.load_model(model_path, compile=False)
         return model
     except Exception as e:
-        st.error(f"❌ Error loading model: {e}")
+        st.error(f"❌ Error: {e}")
         return None
 
-# Load model
 if 'model' not in st.session_state:
-    with st.spinner("Loading model..."):
-        model = load_model()
-        if model:
-            st.session_state.model = model
-            st.success("✅ Model loaded successfully!")
-        else:
-            st.stop()
+    model = load_model()
+    if model:
+        st.session_state.model = model
+        st.success("✅ Model loaded!")
 
-# Constants
+# Audio processing functions (same as before)
 frame_length = 256
 frame_step = 160
 fft_length = 384
 
-# English vocabulary
 characters = [x for x in "abcdefghijklmnopqrstuvwxyz'?! "]
 char_to_num = tf.keras.layers.StringLookup(vocabulary=characters, oov_token="")
 num_to_char = tf.keras.layers.StringLookup(
     vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
 )
 
-# Audio processing functions
 def process_audio_file(audio_path):
     try:
         audio = tf.io.read_file(audio_path)
@@ -82,9 +70,8 @@ def process_audio_file(audio_path):
         spectrogram = (spectrogram - means) / (stddevs + 1e-10)
 
         return spectrogram
-    
     except Exception as e:
-        st.error(f"❌ Error processing file: {e}")
+        st.error(f"❌ Error: {e}")
         return None
 
 def decode_prediction(pred):
@@ -99,7 +86,6 @@ def decode_prediction(pred):
             output_text.append(text)
         
         return output_text[0] if output_text else ""
-    
     except Exception as e:
         return ""
 
@@ -112,135 +98,76 @@ def predict_from_audio(audio_path):
         spectrogram = tf.expand_dims(spectrogram, axis=0)
         prediction = st.session_state.model(spectrogram, training=False)
         text = decode_prediction(prediction)
-        
         return text
-    
     except Exception as e:
-        st.error(f"❌ Prediction error: {e}")
+        st.error(f"❌ Error: {e}")
         return None
 
-# Try streamlit-microphone
-try:
-    from streamlit_microphone import streamlit_microphone
-    
-    tab1, tab2 = st.tabs(["🎤 Record Audio", "📁 Upload File"])
-    
-    with tab1:
-        st.header("Record Audio with Microphone")
-        
-        st.info("""
-        **Instructions:**
-        1. Click the microphone button below
-        2. Allow microphone access in your browser
-        3. Speak clearly in English
-        4. Click stop when finished
-        5. Click 'Analyze Recording' to get transcription
-        """)
-        
-        # Microphone recorder
-        audio_bytes = streamlit_microphone(
-            key="microphone",
-            start_prompt="🎤 Start recording",
-            stop_prompt="⏹️ Stop recording",
-            just_once=False
-        )
-        
-        if audio_bytes:
-            st.audio(audio_bytes, format="audio/wav")
-            
-            if st.button("🔍 Analyze Recording", use_container_width=True):
-                with st.spinner("Processing audio..."):
-                    try:
-                        # Save audio bytes to temporary file
-                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-                        temp_file.write(audio_bytes)
-                        temp_filename = temp_file.name
-                        temp_file.close()
-                        
-                        prediction = predict_from_audio(temp_filename)
-                        
-                        if prediction:
-                            st.session_state.last_prediction = prediction
-                            st.success("✅ Analysis complete!")
-                        
-                        # Clean up
-                        try:
-                            os.unlink(temp_filename)
-                        except:
-                            pass
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error processing recording: {e}")
-        
-        # Show results
-        if st.session_state.get('last_prediction'):
-            st.success("**Predicted Text:**")
-            st.code(st.session_state.last_prediction)
-    
-    with tab2:
-        st.header("Upload Audio File")
-        
-        uploaded_audio = st.file_uploader("Choose WAV file", type=['wav'])
-        
-        if uploaded_audio:
-            st.audio(uploaded_audio, format='audio/wav')
-            
-            if st.button("🔍 Analyze Uploaded File", use_container_width=True):
-                with st.spinner("Processing file..."):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                        tmp_file.write(uploaded_audio.getvalue())
-                        audio_path = tmp_file.name
-                    
-                    prediction = predict_from_audio(audio_path)
-                    
-                    if prediction:
-                        st.success("**Predicted Text:**")
-                        st.code(prediction)
-                    
-                    try:
-                        os.unlink(audio_path)
-                    except:
-                        pass
+# HTML Audio Recorder
+st.header("🎤 Record Audio")
 
-except ImportError:
-    st.warning("streamlit-microphone not available. Using upload-only version.")
-    
-    st.header("📁 Upload Audio File")
-    
-    uploaded_audio = st.file_uploader("Choose WAV audio file", type=['wav'])
-    
-    if uploaded_audio:
-        st.audio(uploaded_audio, format='audio/wav')
-        
-        if st.button("🔍 Transcribe Audio", use_container_width=True):
-            with st.spinner("Processing audio..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                    tmp_file.write(uploaded_audio.getvalue())
-                    audio_path = tmp_file.name
-                
-                prediction = predict_from_audio(audio_path)
-                
-                if prediction:
-                    st.success("✅ Transcription complete!")
-                    st.code(prediction)
-                
-                try:
-                    os.unlink(audio_path)
-                except:
-                    pass
+recorder_html = """
+<script>
+function startRecording() {
+    navigator.mediaDevices.getUserMedia({ audio: true })
+    .then(function(stream) {
+        alert("Microphone access granted! This is a demo - please use the upload tab for actual transcription.");
+    })
+    .catch(function(err) {
+        alert("Error accessing microphone: " + err);
+    });
+}
+</script>
 
-# Model info
-with st.expander("ℹ️ Model Information"):
-    st.markdown("""
-    **Model Specifications:**
-    - **Architecture:** DeepSpeech 2
-    - **Training Data:** LJSpeech dataset
-    - **Language:** English only
-    - **Vocabulary:** 31 English characters
+<button onclick="startRecording()" style="
+    padding: 15px 30px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    margin: 10px 0;
+">
+🎤 Start Recording (Demo)
+</button>
+
+<p><em>Note: For full recording functionality, please use the upload tab below.</em></p>
+"""
+
+st.components.v1.html(recorder_html, height=150)
+
+st.header("📁 Upload Audio File")
+uploaded_file = st.file_uploader("Upload WAV file for transcription", type=['wav'])
+
+if uploaded_file and st.session_state.get('model'):
+    st.audio(uploaded_file, format='audio/wav')
     
-    **Tips for Better Results:**
-    - Speak clearly and at moderate pace
-    - Use good quality microphone
-    - Record in quiet environment
-    - Use 16kHz sample rate for best results
-    """)
+    if st.button("🔍 Transcribe Audio", use_container_width=True):
+        with st.spinner("Processing audio..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as f:
+                f.write(uploaded_file.getvalue())
+                temp_path = f.name
+            
+            prediction = predict_from_audio(temp_path)
+            
+            if prediction:
+                st.success("✅ Transcription complete!")
+                st.subheader("Predicted Text:")
+                st.code(prediction)
+                
+                # Text statistics
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Characters", len(prediction))
+                with col2:
+                    st.metric("Words", len(prediction.split()))
+            else:
+                st.error("❌ Failed to transcribe audio")
+            
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+
+st.info("💡 Upload a WAV file to transcribe speech to text")
