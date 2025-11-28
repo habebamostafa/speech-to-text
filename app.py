@@ -9,8 +9,6 @@ import tempfile
 import os
 import time
 from jiwer import wer, cer
-import io
-import base64
 
 # محاولة استيراد مكتبات الصوت
 try:
@@ -18,7 +16,6 @@ try:
     from scipy.io import wavfile
     AUDIO_AVAILABLE = True
 except ImportError as e:
-    st.error(f"❌ مكتبات الصوت غير مثبتة: {e}")
     AUDIO_AVAILABLE = False
 
 # إعدادات الصفحة
@@ -58,6 +55,13 @@ st.markdown("""
         border-left: 4px solid #0c5460;
         margin: 10px 0;
     }
+    .warning-box {
+        background-color: #ffeaa7;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #fdcb6e;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -75,8 +79,8 @@ if 'num_to_char' not in st.session_state:
     st.session_state.num_to_char = None
 if 'last_prediction' not in st.session_state:
     st.session_state.last_prediction = ""
-if 'is_recording' not in st.session_state:
-    st.session_state.is_recording = False
+if 'recorded_audio' not in st.session_state:
+    st.session_state.recorded_audio = None
 
 # الشريط الجانبي
 with st.sidebar:
@@ -112,7 +116,10 @@ with st.sidebar:
                     st.success("✅ تم تحميل النموذج بنجاح!")
                     
                     # تنظيف الملف المؤقت
-                    os.unlink(model_path)
+                    try:
+                        os.unlink(model_path)
+                    except:
+                        pass
                     
                 except Exception as e:
                     st.error(f"❌ خطأ في تحميل النموذج: {e}")
@@ -127,7 +134,16 @@ with st.sidebar:
         st.session_state.duration = st.slider("مدة التسجيل (ثواني)", 1, 15, 5)
         st.session_state.sample_rate = st.selectbox("معدل العينات", [16000, 22050, 44100], index=0)
     else:
-        st.error("❌ مكتبات الصوت غير مثبتة")
+        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+        st.warning("""
+        **مكتبات الصوت غير متاحة**
+        
+        للتسجيل من المايكروفون، تأكد من:
+        - تثبيت `sounddevice` و `scipy`
+        - توصيل المايكروفون
+        - منح الأذونات
+        """)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # دوال المعالجة الصوتية
 def process_audio_file(audio_path):
@@ -229,12 +245,13 @@ def record_audio(duration=5, sample_rate=16000):
         # عرض التقدم
         progress_placeholder = st.empty()
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
         for i in range(duration):
             time.sleep(1)
             progress = (i + 1) / duration
             progress_bar.progress(progress)
-            progress_placeholder.text(f"🎙️ جاري التسجيل... {i + 1}/{duration} ثانية")
+            status_text.text(f"🎙️ جاري التسجيل... {i + 1}/{duration} ثانية")
         
         sd.wait()  # انتظار انتهاء التسجيل
         
@@ -243,6 +260,7 @@ def record_audio(duration=5, sample_rate=16000):
         
         progress_placeholder.empty()
         progress_bar.empty()
+        status_text.empty()
         
         return temp_filename
     
@@ -262,40 +280,33 @@ if st.session_state.model is None:
     2. **رفع الإعدادات**: ملف `config.json` 
     3. **رفع المعالجات**: ملف `preprocessors.pkl`
     
-    ### 📁 مثال على هيكل الملفات:
-    ```
-    النموذج المدرب/
-    ├── my_model.h5           # النموذج المحفوظ
-    ├── config.json           # إعدادات المعالجة
-    └── preprocessors.pkl     # معالجات النص
-    ```
+    ### 📁 الملفات المطلوبة:
+    - `my_model.h5` - النموذج المدرب
+    - `config.json` - إعدادات المعالجة
+    - `preprocessors.pkl` - معالجات النص
     """)
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # قسم المساعدة
-    with st.expander("🆘 مساعدة في تحضير الملفات"):
+    # أمثلة على إنشاء الملفات
+    with st.expander("🛠️ كيفية إنشاء الملفات المطلوبة"):
         st.markdown("""
-        ### كيفية إنشاء الملفات المطلوبة:
+        **من كود التدريب، احفظ هذه الملفات:**
         
-        **1. ملف النموذج (`my_model.h5`):**
         ```python
+        # حفظ النموذج
         model.save('my_model.h5')
-        ```
         
-        **2. ملف الإعدادات (`config.json`):**
-        ```python
+        # حفظ الإعدادات
         import json
         config = {
             'frame_length': 256,
-            'frame_step': 160, 
+            'frame_step': 160,
             'fft_length': 384
         }
         with open('config.json', 'w') as f:
             json.dump(config, f)
-        ```
         
-        **3. ملف المعالجات (`preprocessors.pkl`):**
-        ```python
+        # حفظ المعالجات
         import pickle
         preprocessors = {
             'char_to_num': char_to_num,
@@ -320,14 +331,18 @@ with tab1:
     st.header("التسجيل المباشر من الميكروفون")
     
     if not AUDIO_AVAILABLE:
+        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
         st.error("""
-        ❌ **خاصية التسجيل غير متاحة**
+        ## ❌ خاصية التسجيل غير متاحة
         
-        يرجى تثبيت مكتبات الصوت:
-        ```bash
-        pip install sounddevice scipy
-        ```
+        **لتمكين التسجيل من المايكروفون، تأكد من:**
+        - تثبيت المكتبات: `sounddevice` و `scipy`
+        - توصيل المايكروفون بشكل صحيح
+        - منح التطبيق صلاحية استخدام المايكروفون
+        
+        **حل بديل:** يمكنك استخدام تبويب "تحميل ملف صوتي" لرفع تسجيلات جاهزة
         """)
+        st.markdown('</div>', unsafe_allow_html=True)
     else:
         col1, col2 = st.columns([1, 1])
         
@@ -345,8 +360,10 @@ with tab1:
                     if audio_file:
                         st.session_state.recorded_audio = audio_file
                         st.success("✅ تم التسجيل بنجاح!")
+                        st.rerun()
             
-            if st.session_state.get('recorded_audio'):
+            # عرض التسجيل إذا موجود
+            if st.session_state.recorded_audio:
                 st.audio(st.session_state.recorded_audio, format='audio/wav')
                 
                 if st.button("🔍 تحليل التسجيل", use_container_width=True):
@@ -355,7 +372,9 @@ with tab1:
                         
                         if prediction:
                             st.session_state.last_prediction = prediction
+                            st.success("✅ تم التحليل بنجاح!")
                             st.rerun()
+            
             st.markdown('</div>', unsafe_allow_html=True)
         
         with col2:
@@ -365,6 +384,8 @@ with tab1:
                 st.success("**النص المتوقع:**")
                 st.write(st.session_state.last_prediction)
                 st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("👆 سجل صوتاً أولاً ثم اضغط على تحليل التسجيل")
 
 with tab2:
     st.header("تحميل ملف صوتي")
@@ -377,8 +398,17 @@ with tab2:
             tmp_file.write(uploaded_audio.getvalue())
             audio_path = tmp_file.name
         
-        # عرض الملف
-        st.audio(uploaded_audio, format='audio/wav')
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # عرض الملف
+            st.audio(uploaded_audio, format='audio/wav')
+        
+        with col2:
+            # معلومات الملف
+            file_size = len(uploaded_audio.getvalue()) / 1024
+            st.metric("حجم الملف", f"{file_size:.1f} KB")
+            st.metric("النوع", "WAV")
         
         if st.button("🔍 تحليل الملف الصوتي", use_container_width=True):
             with st.spinner("جاري التعرف على الكلام..."):
@@ -394,7 +424,10 @@ with tab2:
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 # تنظيف الملف المؤقت
-                os.unlink(audio_path)
+                try:
+                    os.unlink(audio_path)
+                except:
+                    pass
 
 with tab3:
     st.header("تقييم أداء النموذج")
@@ -407,7 +440,8 @@ with tab3:
         reference_text = st.text_area(
             "النص المرجعي (الصحيح):",
             placeholder="أدخل النص الصحيح هنا...",
-            height=100
+            height=120,
+            key="ref_text"
         )
     
     with col2:
@@ -415,7 +449,8 @@ with tab3:
             "النص المتوقع:",
             value=st.session_state.get('last_prediction', ''),
             placeholder="سيظهر النص المتوقع هنا...",
-            height=100
+            height=120,
+            key="pred_text"
         )
     
     if st.button("📊 حساب مقاييس الدقة", use_container_width=True) and reference_text and predicted_text:
@@ -436,15 +471,20 @@ with tab3:
                 st.metric("الدقة التقريبية", f"{accuracy:.2%}")
             
             # تفسير النتائج
-            if wer_score < 0.1:
-                st.success("🎉 دقة ممتازة! النموذج يعمل بشكل رائع")
+            st.subheader("📈 تفسير النتائج:")
+            if wer_score == 0:
+                st.success("🎉 **ممتاز**: النموذج تعرف على النص بشكل كامل!")
+            elif wer_score < 0.1:
+                st.success("🔹 **ممتاز**: النموذج يعمل بدقة عالية جداً")
             elif wer_score < 0.3:
-                st.info("✅ دقة جيدة! النموذج يعمل بشكل مقبول")
+                st.info("🔸 **جيد**: النموذج يعمل بدقة مقبولة")
+            elif wer_score < 0.5:
+                st.warning("⚠️ **متوسط**: النموذج يحتاج لتحسين")
             else:
-                st.warning("⚠️ الدقة تحتاج تحسين. جرب تسجيلات أوضح")
+                st.error("❌ **منخفض**: دقة النموذج منخفضة وتحتاج تحسين كبير")
                 
         except Exception as e:
-            st.error(f"❌ خطأ في الحساب: {e}")
+            st.error(f"❌ خطأ في حساب المقاييس: {e}")
 
 # قسم المعلومات
 with st.expander("ℹ️ معلومات عن النظام"):
@@ -452,23 +492,29 @@ with st.expander("ℹ️ معلومات عن النظام"):
     ### 🎯 ميزات النظام:
     - ✅ تحميل النموذج الحقيقي المدرب
     - ✅ التسجيل المباشر من الميكروفون
-    - ✅ تحليل ملفات صوتية مرفوعة
+    - ✅ تحليل ملفات صوتية مرفوعة  
     - ✅ تقييم دقة النموذج
     - ✅ واجهة عربية كاملة
     
     ### 💡 نصائح للحصول على أفضل النتائج:
-    1. استخدم ميكروفون جيد النوعية
-    2. تسجل في بيئة هادئة
-    3. تحدث بوضوح وبطء معتدل
-    4. استخدم معدل عينات 16kHz للأفضل
-    5. تجنب الضوضاء الخلفية
+    1. **استخدم ميكروفون جيد** النوعية
+    2. **سجل في بيئة هادئة** بعيداً عن الضوضاء
+    3. **تحدث بوضوح** وبطء معتدل
+    4. **استخدم معدل عينات 16kHz** للأفضل
+    5. **تجنب الصدى** والضوضاء الخلفية
+    
+    ### 🔧 المكتبات المستخدمة:
+    - TensorFlow 2.15+ للنموذج
+    - SoundDevice للتسجيل
+    - SciPy للمعالجة
+    - Streamlit للواجهة
     """)
 
 # تذييل الصفحة
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎤 نظام التعرف على الكلام - النموذج الحقيقي | تم التطوير باستخدام TensorFlow & Streamlit"
+    "🎤 نظام التعرف على الكلام - يعمل بالمكتبات المطلوبة فقط 🚀"
     "</div>",
     unsafe_allow_html=True
 )
