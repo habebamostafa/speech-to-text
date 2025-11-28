@@ -110,7 +110,7 @@ def convert_audio_to_wav(input_path, output_path, file_extension):
         audio = AudioSegment.from_file(input_path, format=file_extension)
         
         # Convert to mono and set sample rate to 16000 Hz
-        audio = audio.set_channels(1)
+        audio = audio.set_channels(1)  # Force mono
         audio = audio.set_frame_rate(16000)
         
         # Set appropriate parameters
@@ -130,12 +130,8 @@ def convert_audio_to_wav(input_path, output_path, file_extension):
         import soundfile as sf
         st.info("🔄 Trying librosa for conversion...")
         
-        # Try different backends
-        try:
-            audio, sr = librosa.load(input_path, sr=16000, mono=True)
-        except:
-            # If default backend fails, try audioread
-            audio, sr = librosa.load(input_path, sr=16000, mono=True, res_type='kaiser_fast')
+        # Load with mono conversion
+        audio, sr = librosa.load(input_path, sr=16000, mono=True)
         
         # Save as WAV
         sf.write(output_path, audio, 16000, subtype='PCM_16')
@@ -145,35 +141,24 @@ def convert_audio_to_wav(input_path, output_path, file_extension):
     except Exception as e:
         st.warning(f"⚠️ Librosa failed: {e}")
     
-    # Method 3: Try using subprocess with ffmpeg if available
-    try:
-        import subprocess
-        st.info("🔄 Trying ffmpeg for conversion...")
-        
-        result = subprocess.run([
-            'ffmpeg', '-i', input_path, '-ac', '1', '-ar', '16000', 
-            '-acodec', 'pcm_s16le', output_path, '-y'
-        ], capture_output=True, text=True)
-        
-        if result.returncode == 0 and os.path.exists(output_path):
-            st.success("✅ Conversion successful with ffmpeg!")
-            return True
-        else:
-            st.warning(f"⚠️ FFmpeg failed: {result.stderr}")
-            
-    except Exception as e:
-        st.warning(f"⚠️ FFmpeg method failed: {e}")
-    
     return False
 
-# Audio processing functions
+# Fixed audio processing functions
 def process_audio_file(audio_path):
-    """Process audio file - same as training function"""
+    """Process audio file - handle stereo to mono conversion"""
     try:
         # Read file
         audio = tf.io.read_file(audio_path)
         audio, sample_rate = tf.audio.decode_wav(audio)
-        audio = tf.squeeze(audio, axis=-1)
+        
+        # Handle stereo to mono conversion
+        if len(audio.shape) > 1 and audio.shape[1] == 2:
+            # Convert stereo to mono by averaging channels
+            audio = tf.reduce_mean(audio, axis=1)
+        else:
+            # If already mono, just squeeze
+            audio = tf.squeeze(audio, axis=-1)
+        
         audio = tf.cast(audio, tf.float32)
 
         # Extract spectrogram
@@ -231,6 +216,24 @@ def predict_from_audio(audio_path):
         st.error(f"❌ Prediction error: {e}")
         return None
 
+# Function to check audio file properties
+def get_audio_info(audio_path):
+    """Get information about audio file"""
+    try:
+        audio = tf.io.read_file(audio_path)
+        audio_tensor, sample_rate = tf.audio.decode_wav(audio)
+        
+        info = {
+            'sample_rate': sample_rate.numpy(),
+            'channels': audio_tensor.shape[1] if len(audio_tensor.shape) > 1 else 1,
+            'duration': audio_tensor.shape[0] / sample_rate.numpy(),
+            'shape': audio_tensor.shape
+        }
+        return info
+    except Exception as e:
+        st.error(f"❌ Error getting audio info: {e}")
+        return None
+
 # Main interface
 st.markdown('<div class="upload-box">', unsafe_allow_html=True)
 st.header("📁 Upload Audio File")
@@ -275,6 +278,12 @@ if uploaded_audio is not None:
                     wav_path = input_temp_path
                     conversion_success = True
                     st.success("✅ WAV file - no conversion needed")
+                    
+                    # Check audio properties
+                    audio_info = get_audio_info(wav_path)
+                    if audio_info:
+                        st.info(f"📊 Audio Info: {audio_info['channels']} channel(s), {audio_info['sample_rate']}Hz, {audio_info['duration']:.2f}s")
+                        
                 else:
                     # Convert to WAV
                     st.info(f"🔄 Converting {file_extension.upper()} to WAV format...")
@@ -287,6 +296,11 @@ if uploaded_audio is not None:
                 if conversion_success:
                     # Verify the converted file
                     if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                        # Check final audio properties
+                        final_audio_info = get_audio_info(wav_path)
+                        if final_audio_info:
+                            st.info(f"📊 Final Audio: {final_audio_info['channels']} channel(s), {final_audio_info['sample_rate']}Hz")
+                        
                         # Process the WAV file
                         prediction = predict_from_audio(wav_path)
                         
@@ -317,10 +331,10 @@ if uploaded_audio is not None:
                     st.error("❌ All conversion methods failed")
                     st.markdown('<div class="warning-box">', unsafe_allow_html=True)
                     st.warning("""
-                    **Conversion failed! Possible solutions:**
-                    1. **Install FFmpeg** - Download from https://ffmpeg.org/
-                    2. **Convert manually** to WAV format first
-                    3. **Try a different audio format** like MP3
+                    **Conversion failed! Try:**
+                    1. Convert to WAV manually first
+                    2. Use mono audio (1 channel)
+                    3. Use 16kHz sample rate
                     """)
                     st.markdown('</div>', unsafe_allow_html=True)
                 
@@ -348,27 +362,33 @@ if st.session_state.get('last_prediction'):
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Installation instructions
-with st.expander("🔧 Installation & Troubleshooting"):
+# Quick fix for stereo files
+with st.expander("🔧 Quick Fix for Stereo Files"):
     st.markdown("""
-    ### Required Packages:
-    ```bash
-    pip install streamlit tensorflow numpy pydub librosa soundfile scipy
+    **If you have stereo (2-channel) audio files:**
+    
+    1. **Use online converter:** https://online-audio-converter.com/
+    2. **Select:** Mono, 16kHz, WAV format
+    3. **Upload the converted file**
+    
+    **Or use this Python code to convert:**
+    ```python
+    from pydub import AudioSegment
+    
+    # Load stereo file
+    audio = AudioSegment.from_file("your_file.wav")
+    
+    # Convert to mono
+    audio = audio.set_channels(1)
+    
+    # Set to 16kHz
+    audio = audio.set_frame_rate(16000)
+    
+    # Save
+    audio.export("converted.wav", format="wav")
     ```
-    
-    ### For M4A Support (Required):
-    **Option 1: Install FFmpeg (Recommended)**
-    - **Windows:** Download from https://ffmpeg.org/download.html
-    - **Mac:** `brew install ffmpeg`
-    - **Linux:** `sudo apt install ffmpeg`
-    
-    **Option 2: Use Online Converter**
-    Convert M4A to WAV first using: https://online-audio-converter.com/
-    
-    **Option 3: Manual Conversion**
-    Use VLC media player or Audacity to convert to WAV format
     """)
 
 # Footer
 st.markdown("---")
-st.markdown("🎤 Speech Recognition System - Supports M4A, MP3, WAV & more!")
+st.markdown("🎤 Speech Recognition System - Fixed for Stereo/Mono Issues")
