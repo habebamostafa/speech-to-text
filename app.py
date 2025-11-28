@@ -42,6 +42,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<h1 class="main-header">🎤 نظام التعرف على الكلام</h1>', unsafe_allow_html=True)
+import os
+st.write("Current directory:", os.getcwd())
+st.write("Files in directory:", os.listdir())
 
 # تحميل النموذج تلقائياً
 @st.cache_resource
