@@ -38,16 +38,18 @@ st.markdown("""
         border-left: 4px solid #ffc107;
         margin: 10px 0;
     }
+    .upload-box {
+        background-color: #e8f4fd;
+        padding: 20px;
+        border-radius: 10px;
+        border: 2px dashed #1f77b4;
+        margin: 20px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Main title
 st.markdown('<h1 class="main-header">🎤 Speech Recognition System</h1>', unsafe_allow_html=True)
-
-# Debug information
-import os
-st.write("Current directory:", os.getcwd())
-st.write("Files in directory:", os.listdir('.'))
 
 # Load model automatically
 @st.cache_resource
@@ -95,6 +97,30 @@ char_to_num = tf.keras.layers.StringLookup(vocabulary=characters, oov_token="")
 num_to_char = tf.keras.layers.StringLookup(
     vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
 )
+
+# Audio conversion function
+def convert_audio_to_wav(input_path, output_path):
+    """Convert any audio format to WAV using pydub"""
+    try:
+        from pydub import AudioSegment
+        
+        # Load audio file
+        audio = AudioSegment.from_file(input_path)
+        
+        # Convert to mono and set sample rate to 16000 Hz (model expects this)
+        audio = audio.set_channels(1)
+        audio = audio.set_frame_rate(16000)
+        
+        # Export as WAV
+        audio.export(output_path, format="wav")
+        return True
+        
+    except ImportError:
+        st.error("❌ pydub not installed. Please install: pip install pydub")
+        return False
+    except Exception as e:
+        st.error(f"❌ Error converting audio: {e}")
+        return False
 
 # Audio processing functions
 def process_audio_file(audio_path):
@@ -177,165 +203,171 @@ def convert_to_wav(audio_data, sample_rate=16000):
         st.error(f"❌ Error converting audio: {e}")
         return None
 
-# Tabs interface
-tab1, tab2 = st.tabs(["🎤 Record Audio", "📁 Upload Audio File"])
+# Main interface
+st.markdown('<div class="upload-box">', unsafe_allow_html=True)
+st.header("📁 Upload Audio File")
 
-with tab1:
-    st.header("Record Audio with Microphone")
+# Supported formats
+supported_formats = ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'aac', 'wma']
+
+uploaded_audio = st.file_uploader(
+    f"Choose audio file ({', '.join(supported_formats)})", 
+    type=supported_formats
+)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+if uploaded_audio is not None:
+    # Display file info
+    file_extension = uploaded_audio.name.split('.')[-1].lower()
+    file_size = len(uploaded_audio.getvalue()) / 1024
     
-    # Streamlit audio recorder
-    st.markdown('<div class="recording-box">', unsafe_allow_html=True)
-    st.subheader("🎙️ Record Your Voice")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("File Size", f"{file_size:.1f} KB")
+    with col2:
+        st.metric("Format", file_extension.upper())
+    with col3:
+        st.metric("Status", "✅ Ready")
     
-    # Audio recorder using streamlit-audiorecorder (alternative approach)
-    st.info("""
-    **Instructions:**
-    1. Click the record button below
-    2. Allow microphone access in your browser
-    3. Speak clearly in English
-    4. Click stop when finished
-    5. Click 'Analyze Recording' to get the transcription
-    """)
+    # Play audio
+    st.audio(uploaded_audio, format=f'audio/{file_extension}')
     
-    # Using streamlit's built-in audio recorder (if available)
-    # Alternative: Use audio_recorder component
-    try:
-        from audio_recorder_streamlit import audio_recorder
-        
-        audio_bytes = audio_recorder(
-            text="Click to record",
-            recording_color="#e8b62c",
-            neutral_color="#6aa36f",
-            icon_name="microphone",
-            icon_size="2x",
-        )
-        
-        if audio_bytes:
-            st.audio(audio_bytes, format="audio/wav")
-            
-            if st.button("🔍 Analyze Recording", key="analyze_record", use_container_width=True):
-                with st.spinner("Processing audio..."):
-                    # Convert bytes to numpy array
-                    try:
-                        import io
-                        from scipy.io import wavfile
-                        
-                        # Create temporary file from bytes
-                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-                        temp_file.write(audio_bytes)
-                        temp_filename = temp_file.name
-                        temp_file.close()
-                        
-                        prediction = predict_from_audio(temp_filename)
-                        
-                        if prediction:
-                            st.session_state.last_prediction = prediction
-                            st.success("✅ Analysis complete!")
-                        
-                        # Clean up
+    if st.button("🔍 Transcribe Audio", use_container_width=True):
+        with st.spinner("Processing audio file..."):
+            try:
+                # Save uploaded file temporarily
+                input_temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}')
+                input_temp_file.write(uploaded_audio.getvalue())
+                input_temp_path = input_temp_file.name
+                input_temp_file.close()
+                
+                # If file is already WAV, use directly
+                if file_extension == 'wav':
+                    wav_path = input_temp_path
+                else:
+                    # Convert to WAV
+                    st.info(f"🔄 Converting {file_extension.upper()} to WAV format...")
+                    wav_temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                    wav_path = wav_temp_file.name
+                    wav_temp_file.close()
+                    
+                    if convert_audio_to_wav(input_temp_path, wav_path):
+                        st.success("✅ Conversion successful!")
+                    else:
+                        st.error("❌ Conversion failed")
+                        # Clean up and exit
                         try:
-                            os.unlink(temp_filename)
+                            os.unlink(input_temp_path)
                         except:
                             pass
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error processing recording: {e}")
-                        
-    except ImportError:
-        st.warning("""
-        **Audio recorder not available. Alternative method:**
-        
-        Please use the **Upload Audio File** tab to upload pre-recorded audio files.
-        """)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Show results
-    if st.session_state.get('last_prediction'):
-        st.markdown('<div class="result-box">', unsafe_allow_html=True)
-        st.success("**Predicted Text:**")
-        st.code(st.session_state.last_prediction)
-        
-        # Text statistics
-        text_length = len(st.session_state.last_prediction)
-        word_count = len(st.session_state.last_prediction.split())
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Characters", text_length)
-        with col2:
-            st.metric("Words", word_count)
-            
-        st.markdown('</div>', unsafe_allow_html=True)
-
-with tab2:
-    st.header("Upload Audio File")
-    
-    uploaded_audio = st.file_uploader("Choose WAV audio file", type=['wav'])
-    
-    if uploaded_audio is not None:
-        # Display file info
-        file_size = len(uploaded_audio.getvalue()) / 1024
-        st.write(f"**File Info:** Size: {file_size:.1f} KB | Format: WAV")
-        
-        # Play audio
-        st.audio(uploaded_audio, format='audio/wav')
-        
-        if st.button("🔍 Analyze Audio File", use_container_width=True):
-            with st.spinner("Processing audio file..."):
-                # Save uploaded file temporarily
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                    tmp_file.write(uploaded_audio.getvalue())
-                    audio_path = tmp_file.name
+                        return
                 
-                prediction = predict_from_audio(audio_path)
+                # Process the WAV file
+                prediction = predict_from_audio(wav_path)
                 
                 if prediction:
                     st.session_state.last_prediction = prediction
-                    st.success("✅ Analysis complete!")
+                    st.success("✅ Transcription complete!")
                     
                     st.markdown('<div class="result-box">', unsafe_allow_html=True)
-                    st.success("**Predicted Text:**")
-                    st.code(prediction)
+                    st.subheader("📝 Transcribed Text")
+                    st.code(prediction, language='text')
                     
                     # Text statistics
                     text_length = len(prediction)
                     word_count = len(prediction.split())
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
+                    col_stat1, col_stat2 = st.columns(2)
+                    with col_stat1:
                         st.metric("Characters", text_length)
-                    with col2:
+                    with col_stat2:
                         st.metric("Words", word_count)
                         
                     st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.error("❌ Failed to transcribe audio")
                 
-                # Clean up
+                # Clean up temporary files
                 try:
-                    os.unlink(audio_path)
+                    os.unlink(input_temp_path)
+                    if file_extension != 'wav':
+                        os.unlink(wav_path)
                 except:
                     pass
+                    
+            except Exception as e:
+                st.error(f"❌ Error processing file: {e}")
+
+# Show previous results
+if st.session_state.get('last_prediction'):
+    st.markdown('<div class="result-box">', unsafe_allow_html=True)
+    st.subheader("📝 Last Transcription")
+    st.code(st.session_state.last_prediction, language='text')
+    
+    # Clear button
+    if st.button("🗑️ Clear Result"):
+        st.session_state.last_prediction = None
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # Model information
-with st.expander("ℹ️ Model Information"):
+with st.expander("ℹ️ Model Information & Instructions"):
     st.markdown("""
-    **Model Specifications:**
+    ### 🎯 Supported Audio Formats:
+    - **WAV** (Recommended)
+    - **M4A** (iPhone recordings)
+    - **MP3** 
+    - **FLAC**
+    - **OGG**
+    - **AAC**
+    - **WMA**
+    
+    ### 📊 Model Specifications:
     - **Architecture:** DeepSpeech 2
     - **Training Data:** LJSpeech dataset
     - **Language:** English only
     - **Vocabulary:** 31 English characters
-    - **Processing Settings:**
-      - Frame Length: 256
-      - Frame Step: 160  
-      - FFT Length: 384
+    - **Sample Rate:** 16kHz (auto-converted)
     
-    **Tips for Better Results:**
-    - Speak clearly and at moderate pace
-    - Use good quality microphone
-    - Record in quiet environment
-    - Use 16kHz sample rate for best results
+    ### 💡 Tips for Best Results:
+    1. **Speak clearly** and at moderate pace
+    2. **Use good quality** recordings
+    3. **Record in quiet** environment
+    4. **Ideal duration:** 3-10 seconds
+    5. **M4A files** from iPhone work great!
+    
+    ### ⚠️ Important Notes:
+    - All files are automatically converted to WAV format
+    - Sample rate is set to 16kHz for model compatibility
+    - Audio is converted to mono channel
+    - Large files may take longer to process
+    """)
+
+# Installation instructions
+with st.expander("🔧 Installation Requirements"):
+    st.markdown("""
+    ### Required Packages:
+    ```bash
+    pip install streamlit tensorflow numpy pydub librosa scipy
+    ```
+    
+    ### For M4A/MP3 Support (FFmpeg):
+    **Windows:**
+    - Download FFmpeg from: https://ffmpeg.org/download.html
+    - Add to PATH or place ffmpeg.exe in your project folder
+    
+    **Mac:**
+    ```bash
+    brew install ffmpeg
+    ```
+    
+    **Linux:**
+    ```bash
+    sudo apt update && sudo apt install ffmpeg
+    ```
     """)
 
 # Footer
 st.markdown("---")
-st.markdown("🎤 Speech Recognition System - Powered by TensorFlow & Streamlit")
+st.markdown("🎤 Speech Recognition System - Supports M4A, MP3, WAV & more!")
