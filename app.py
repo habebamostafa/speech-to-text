@@ -48,7 +48,7 @@ st.markdown('<h1 class="main-header">🎤 نظام التعرف على الكل�
 def load_model():
     """تحميل النموذج من my_model (1).h5"""
     try:
-        model = keras.models.load_model('my_model (1).h5', compile=False)
+        model = keras.models.load_model('my_model.h5', compile=False)
         return model
     except Exception as e:
         st.error(f"❌ خطأ في تحميل النموذج: {e}")
