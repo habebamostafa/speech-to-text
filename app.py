@@ -105,61 +105,54 @@ num_to_char = tf.keras.layers.StringLookup(
     vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
 )
 
-# Audio conversion and processing functions
+# Audio conversion using librosa only
 def convert_to_mono_16k(audio_path, output_path):
-    """Convert any audio to mono 16kHz WAV format"""
+    """Convert any audio to mono 16kHz WAV format using librosa"""
     try:
-        from pydub import AudioSegment
         import librosa
         import soundfile as sf
         
-        # Try pydub first
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            audio = audio.set_channels(1)  # Convert to mono
-            audio = audio.set_frame_rate(TARGET_SAMPLE_RATE)  # Convert to 16kHz
-            audio = audio.set_sample_width(2)  # 16-bit
-            audio.export(output_path, format="wav")
-            return True
-        except:
-            # Fallback to librosa
-            audio, sr = librosa.load(audio_path, sr=TARGET_SAMPLE_RATE, mono=True)
-            sf.write(output_path, audio, TARGET_SAMPLE_RATE, subtype='PCM_16')
-            return True
-            
+        # Load audio with librosa - automatically converts to mono and 16kHz
+        audio, sr = librosa.load(audio_path, sr=TARGET_SAMPLE_RATE, mono=True)
+        
+        # Save as WAV file
+        sf.write(output_path, audio, TARGET_SAMPLE_RATE, subtype='PCM_16')
+        return True
+        
+    except ImportError:
+        st.error("❌ Required libraries not installed. Please install: pip install librosa soundfile")
+        return False
     except Exception as e:
         st.error(f"❌ Conversion error: {e}")
         return False
 
-def resample_audio(audio, original_sr, target_sr):
-    """Resample audio to target sample rate"""
-    if original_sr == target_sr:
-        return audio
-    
-    # Simple resampling for demonstration
-    # In production, use proper resampling like tf.signal.resample
-    ratio = original_sr / target_sr
-    indices = tf.range(0, tf.shape(audio)[0], ratio, dtype=tf.int32)
-    return tf.gather(audio, indices)
-
-def process_audio_file(audio_path):
-    """Process audio file with proper stereo-to-mono and resampling"""
+def process_audio_directly(audio_bytes, file_extension):
+    """Process audio directly from bytes without saving temporary files"""
     try:
-        # Read file
-        audio = tf.io.read_file(audio_path)
-        audio_tensor, original_sr = tf.audio.decode_wav(audio)
-        original_sr = original_sr.numpy()
+        import librosa
+        import io
         
-        # Convert stereo to mono if needed
-        if len(audio_tensor.shape) > 1 and audio_tensor.shape[1] == 2:
-            # Average the two channels to create mono
-            audio_mono = tf.reduce_mean(audio_tensor, axis=1)
+        # Load audio from bytes
+        if file_extension == 'wav':
+            # For WAV files, use tensorflow directly
+            audio_tensor, original_sr = tf.audio.decode_wav(audio_bytes)
+            
+            # Convert stereo to mono if needed
+            if len(audio_tensor.shape) > 1 and audio_tensor.shape[1] == 2:
+                audio_mono = tf.reduce_mean(audio_tensor, axis=1)
+            else:
+                audio_mono = tf.squeeze(audio_tensor, axis=-1)
+            
+            # Resample if needed
+            if original_sr != TARGET_SAMPLE_RATE:
+                # Simple resampling
+                ratio = original_sr / TARGET_SAMPLE_RATE
+                indices = tf.range(0, tf.shape(audio_mono)[0], ratio, dtype=tf.int32)
+                audio_mono = tf.gather(audio_mono, indices)
         else:
-            audio_mono = tf.squeeze(audio_tensor, axis=-1)
-        
-        # Resample to 16kHz if needed
-        if original_sr != TARGET_SAMPLE_RATE:
-            audio_mono = resample_audio(audio_mono, original_sr, TARGET_SAMPLE_RATE)
+            # For other formats, use librosa
+            audio, _ = librosa.load(io.BytesIO(audio_bytes), sr=TARGET_SAMPLE_RATE, mono=True)
+            audio_mono = tf.convert_to_tensor(audio, dtype=tf.float32)
         
         audio_mono = tf.cast(audio_mono, tf.float32)
 
@@ -181,7 +174,7 @@ def process_audio_file(audio_path):
         return spectrogram
     
     except Exception as e:
-        st.error(f"❌ Error processing file: {e}")
+        st.error(f"❌ Error processing audio: {e}")
         return None
 
 def decode_prediction(pred):
@@ -201,10 +194,10 @@ def decode_prediction(pred):
     except Exception as e:
         return ""
 
-def predict_from_audio(audio_path):
-    """Predict text from audio file"""
+def predict_from_audio_bytes(audio_bytes, file_extension):
+    """Predict text from audio bytes"""
     try:
-        spectrogram = process_audio_file(audio_path)
+        spectrogram = process_audio_directly(audio_bytes, file_extension)
         if spectrogram is None:
             return None
         
@@ -216,23 +209,6 @@ def predict_from_audio(audio_path):
     
     except Exception as e:
         st.error(f"❌ Prediction error: {e}")
-        return None
-
-def get_audio_info(audio_path):
-    """Get information about audio file"""
-    try:
-        audio = tf.io.read_file(audio_path)
-        audio_tensor, sample_rate = tf.audio.decode_wav(audio)
-        
-        info = {
-            'sample_rate': sample_rate.numpy(),
-            'channels': audio_tensor.shape[1] if len(audio_tensor.shape) > 1 else 1,
-            'duration': audio_tensor.shape[0] / sample_rate.numpy(),
-            'shape': audio_tensor.shape
-        }
-        return info
-    except Exception as e:
-        st.error(f"❌ Error getting audio info: {e}")
         return None
 
 # Main interface
@@ -268,68 +244,37 @@ if uploaded_audio is not None:
     if st.button("🔍 Transcribe Audio", use_container_width=True):
         with st.spinner("Processing audio file..."):
             try:
-                # Save uploaded file temporarily
-                input_temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}')
-                input_temp_file.write(uploaded_audio.getvalue())
-                input_temp_path = input_temp_file.name
-                input_temp_file.close()
+                # Get audio bytes
+                audio_bytes = uploaded_audio.getvalue()
                 
-                # Always convert to ensure mono 16kHz
-                st.info("🔄 Converting to mono 16kHz WAV...")
-                converted_temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-                converted_path = converted_temp_file.name
-                converted_temp_file.close()
+                # Process directly from bytes
+                st.info("🔄 Processing audio...")
                 
-                conversion_success = convert_to_mono_16k(input_temp_path, converted_path)
+                prediction = predict_from_audio_bytes(audio_bytes, file_extension)
                 
-                if conversion_success:
-                    # Check audio properties before and after
-                    original_info = get_audio_info(input_temp_path) if file_extension == 'wav' else None
-                    converted_info = get_audio_info(converted_path)
+                if prediction and prediction.strip():
+                    st.session_state.last_prediction = prediction
+                    st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                    st.success("✅ Transcription complete!")
+                    st.markdown('</div>', unsafe_allow_html=True)
                     
-                    if original_info:
-                        st.warning(f"📊 Original: {original_info['channels']}ch, {original_info['sample_rate']}Hz")
+                    st.markdown('<div class="result-box">', unsafe_allow_html=True)
+                    st.subheader("📝 Transcribed Text")
+                    st.code(prediction, language='text')
                     
-                    if converted_info:
-                        st.success(f"📊 Converted: {converted_info['channels']}ch, {converted_info['sample_rate']}Hz, {converted_info['duration']:.1f}s")
+                    # Text statistics
+                    text_length = len(prediction)
+                    word_count = len(prediction.split())
                     
-                    # Process the converted WAV file
-                    prediction = predict_from_audio(converted_path)
-                    
-                    if prediction and prediction.strip():
-                        st.session_state.last_prediction = prediction
-                        st.markdown('<div class="success-box">', unsafe_allow_html=True)
-                        st.success("✅ Transcription complete!")
-                        st.markdown('</div>', unsafe_allow_html=True)
+                    col_stat1, col_stat2 = st.columns(2)
+                    with col_stat1:
+                        st.metric("Characters", text_length)
+                    with col_stat2:
+                        st.metric("Words", word_count)
                         
-                        st.markdown('<div class="result-box">', unsafe_allow_html=True)
-                        st.subheader("📝 Transcribed Text")
-                        st.code(prediction, language='text')
-                        
-                        # Text statistics
-                        text_length = len(prediction)
-                        word_count = len(prediction.split())
-                        
-                        col_stat1, col_stat2 = st.columns(2)
-                        with col_stat1:
-                            st.metric("Characters", text_length)
-                        with col_stat2:
-                            st.metric("Words", word_count)
-                            
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.error("❌ No speech detected or transcription failed")
+                    st.markdown('</div>', unsafe_allow_html=True)
                 else:
-                    st.error("❌ Audio conversion failed")
-                
-                # Clean up temporary files
-                try:
-                    if os.path.exists(input_temp_path):
-                        os.unlink(input_temp_path)
-                    if os.path.exists(converted_path):
-                        os.unlink(converted_path)
-                except Exception as e:
-                    st.warning(f"⚠️ Could not clean up temp files: {e}")
+                    st.error("❌ No speech detected or transcription failed")
                     
             except Exception as e:
                 st.error(f"❌ Error processing file: {e}")
@@ -346,33 +291,75 @@ if st.session_state.get('last_prediction'):
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Instructions
-with st.expander("🎯 Instructions for Best Results"):
+# Simple WAV-only fallback
+with st.expander("🎯 Simple WAV Upload (Fallback)"):
     st.markdown("""
-    **For accurate transcription:**
+    **If you're having issues with other formats, use this simple WAV upload:**
+    """)
     
-    ✅ **Good Quality Audio:**
-    - Clear speech, no background noise
-    - Single speaker
-    - 3-10 seconds duration
+    wav_upload = st.file_uploader("Upload WAV file only", type=['wav'], key="wav_upload")
     
-    ✅ **Technical Requirements:**
-    - Mono (1 channel) audio
-    - 16kHz sample rate  
-    - WAV format recommended
+    if wav_upload and st.session_state.get('model'):
+        st.audio(wav_upload, format='audio/wav')
+        
+        if st.button("🔍 Transcribe WAV", key="transcribe_wav"):
+            with st.spinner("Processing WAV file..."):
+                try:
+                    # Read WAV file
+                    audio_bytes = wav_upload.getvalue()
+                    audio_tensor, original_sr = tf.audio.decode_wav(audio_bytes)
+                    
+                    # Convert to mono if stereo
+                    if len(audio_tensor.shape) > 1 and audio_tensor.shape[1] == 2:
+                        audio_mono = tf.reduce_mean(audio_tensor, axis=1)
+                        st.info("🔄 Converted stereo to mono")
+                    else:
+                        audio_mono = tf.squeeze(audio_tensor, axis=-1)
+                    
+                    audio_mono = tf.cast(audio_mono, tf.float32)
+                    
+                    # Create spectrogram
+                    spectrogram = tf.signal.stft(
+                        audio_mono,
+                        frame_length=frame_length,
+                        frame_step=frame_step,
+                        fft_length=fft_length
+                    )
+                    spectrogram = tf.abs(spectrogram)
+                    spectrogram = tf.math.pow(spectrogram, 0.5)
+                    
+                    # Normalize
+                    means = tf.math.reduce_mean(spectrogram, 1, keepdims=True)
+                    stddevs = tf.math.reduce_std(spectrogram, 1, keepdims=True)
+                    spectrogram = (spectrogram - means) / (stddevs + 1e-10)
+                    
+                    # Predict
+                    spectrogram = tf.expand_dims(spectrogram, axis=0)
+                    prediction = st.session_state.model(spectrogram, training=False)
+                    text = decode_prediction(prediction)
+                    
+                    if text and text.strip():
+                        st.success("✅ Transcription:")
+                        st.code(text)
+                    else:
+                        st.error("❌ No text detected")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
+# Installation instructions
+with st.expander("🔧 Installation Requirements"):
+    st.markdown("""
+    ### Required Packages:
+    ```bash
+    pip install streamlit tensorflow numpy librosa soundfile scipy
+    ```
     
-    ⚠️ **The system automatically:**
-    - Converts stereo to mono
-    - Resamples to 16kHz
-    - Normalizes audio levels
-    
-    **If results are poor:**
-    1. Record in a quiet environment
-    2. Speak clearly and at normal pace
-    3. Use a good microphone
-    4. Avoid audio compression
+    ### For M4A/MP3 Support:
+    The app uses `librosa` which should handle most audio formats.
+    If you encounter issues, convert files to WAV first.
     """)
 
 # Footer
 st.markdown("---")
-st.markdown("🎤 Speech Recognition System - Auto-converts to Mono 16kHz")
+st.markdown("🎤 Speech Recognition System - Using Librosa for Audio Processing")
