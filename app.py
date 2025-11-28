@@ -31,19 +31,19 @@ st.markdown("""
         border-right: 5px solid #1f77b4;
         margin: 10px 0;
     }
-    .recording-box {
-        background-color: #fff3cd;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 4px solid #ffc107;
-        margin: 10px 0;
-    }
     .upload-box {
         background-color: #e8f4fd;
         padding: 20px;
         border-radius: 10px;
         border: 2px dashed #1f77b4;
         margin: 20px 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #ffc107;
+        margin: 10px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -69,7 +69,6 @@ def load_model():
             st.error("❌ Model file not found. Please make sure my_model.h5 exists in the current directory.")
             return None
             
-        st.write(f"📁 Loading model from: {model_path}")
         model = keras.models.load_model(model_path, compile=False)
         return model
     except Exception as e:
@@ -98,26 +97,74 @@ num_to_char = tf.keras.layers.StringLookup(
     vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
 )
 
-# Audio conversion function
-def convert_audio_to_wav(input_path, output_path):
-    """Convert any audio format to WAV using librosa"""
+# Multiple audio conversion methods
+def convert_audio_to_wav(input_path, output_path, file_extension):
+    """Convert any audio format to WAV using multiple methods"""
+    
+    # Method 1: Try pydub first (most reliable for M4A)
+    try:
+        from pydub import AudioSegment
+        st.info("🔄 Trying pydub for conversion...")
+        
+        # Load audio file
+        audio = AudioSegment.from_file(input_path, format=file_extension)
+        
+        # Convert to mono and set sample rate to 16000 Hz
+        audio = audio.set_channels(1)
+        audio = audio.set_frame_rate(16000)
+        
+        # Set appropriate parameters
+        audio = audio.set_sample_width(2)  # 16-bit
+        
+        # Export as WAV
+        audio.export(output_path, format="wav", parameters=["-ac", "1", "-ar", "16000"])
+        st.success("✅ Conversion successful with pydub!")
+        return True
+        
+    except Exception as e:
+        st.warning(f"⚠️ Pydub failed: {e}")
+    
+    # Method 2: Try librosa with different backends
     try:
         import librosa
         import soundfile as sf
+        st.info("🔄 Trying librosa for conversion...")
         
-        # Load audio file with librosa
-        audio, sr = librosa.load(input_path, sr=16000, mono=True)
+        # Try different backends
+        try:
+            audio, sr = librosa.load(input_path, sr=16000, mono=True)
+        except:
+            # If default backend fails, try audioread
+            audio, sr = librosa.load(input_path, sr=16000, mono=True, res_type='kaiser_fast')
         
-        # Save as WAV file with target sample rate
+        # Save as WAV
         sf.write(output_path, audio, 16000, subtype='PCM_16')
+        st.success("✅ Conversion successful with librosa!")
         return True
         
-    except ImportError:
-        st.error("❌ librosa or soundfile not installed. Please install: pip install librosa soundfile")
-        return False
     except Exception as e:
-        st.error(f"❌ Error converting audio: {e}")
-        return False
+        st.warning(f"⚠️ Librosa failed: {e}")
+    
+    # Method 3: Try using subprocess with ffmpeg if available
+    try:
+        import subprocess
+        st.info("🔄 Trying ffmpeg for conversion...")
+        
+        result = subprocess.run([
+            'ffmpeg', '-i', input_path, '-ac', '1', '-ar', '16000', 
+            '-acodec', 'pcm_s16le', output_path, '-y'
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0 and os.path.exists(output_path):
+            st.success("✅ Conversion successful with ffmpeg!")
+            return True
+        else:
+            st.warning(f"⚠️ FFmpeg failed: {result.stderr}")
+            
+    except Exception as e:
+        st.warning(f"⚠️ FFmpeg method failed: {e}")
+    
+    return False
 
 # Audio processing functions
 def process_audio_file(audio_path):
@@ -227,6 +274,7 @@ if uploaded_audio is not None:
                 if file_extension == 'wav':
                     wav_path = input_temp_path
                     conversion_success = True
+                    st.success("✅ WAV file - no conversion needed")
                 else:
                     # Convert to WAV
                     st.info(f"🔄 Converting {file_extension.upper()} to WAV format...")
@@ -234,45 +282,56 @@ if uploaded_audio is not None:
                     wav_path = wav_temp_file.name
                     wav_temp_file.close()
                     
-                    conversion_success = convert_audio_to_wav(input_temp_path, wav_path)
-                    if conversion_success:
-                        st.success("✅ Conversion successful!")
+                    conversion_success = convert_audio_to_wav(input_temp_path, wav_path, file_extension)
                 
                 if conversion_success:
-                    # Process the WAV file
-                    prediction = predict_from_audio(wav_path)
-                    
-                    if prediction:
-                        st.session_state.last_prediction = prediction
-                        st.success("✅ Transcription complete!")
+                    # Verify the converted file
+                    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                        # Process the WAV file
+                        prediction = predict_from_audio(wav_path)
                         
-                        st.markdown('<div class="result-box">', unsafe_allow_html=True)
-                        st.subheader("📝 Transcribed Text")
-                        st.code(prediction, language='text')
-                        
-                        # Text statistics
-                        text_length = len(prediction)
-                        word_count = len(prediction.split())
-                        
-                        col_stat1, col_stat2 = st.columns(2)
-                        with col_stat1:
-                            st.metric("Characters", text_length)
-                        with col_stat2:
-                            st.metric("Words", word_count)
+                        if prediction:
+                            st.session_state.last_prediction = prediction
+                            st.success("✅ Transcription complete!")
                             
-                        st.markdown('</div>', unsafe_allow_html=True)
+                            st.markdown('<div class="result-box">', unsafe_allow_html=True)
+                            st.subheader("📝 Transcribed Text")
+                            st.code(prediction, language='text')
+                            
+                            # Text statistics
+                            text_length = len(prediction)
+                            word_count = len(prediction.split())
+                            
+                            col_stat1, col_stat2 = st.columns(2)
+                            with col_stat1:
+                                st.metric("Characters", text_length)
+                            with col_stat2:
+                                st.metric("Words", word_count)
+                                
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        else:
+                            st.error("❌ Failed to transcribe audio")
                     else:
-                        st.error("❌ Failed to transcribe audio")
+                        st.error("❌ Converted file is empty or doesn't exist")
                 else:
-                    st.error("❌ File conversion failed")
+                    st.error("❌ All conversion methods failed")
+                    st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+                    st.warning("""
+                    **Conversion failed! Possible solutions:**
+                    1. **Install FFmpeg** - Download from https://ffmpeg.org/
+                    2. **Convert manually** to WAV format first
+                    3. **Try a different audio format** like MP3
+                    """)
+                    st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Clean up temporary files
                 try:
-                    os.unlink(input_temp_path)
+                    if os.path.exists(input_temp_path):
+                        os.unlink(input_temp_path)
                     if file_extension != 'wav' and os.path.exists(wav_path):
                         os.unlink(wav_path)
-                except:
-                    pass
+                except Exception as e:
+                    st.warning(f"⚠️ Could not clean up temp files: {e}")
                     
             except Exception as e:
                 st.error(f"❌ Error processing file: {e}")
@@ -289,40 +348,25 @@ if st.session_state.get('last_prediction'):
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Model information
-with st.expander("ℹ️ Model Information & Instructions"):
-    st.markdown("""
-    ### 🎯 Supported Audio Formats:
-    - **WAV** (Recommended)
-    - **M4A** (iPhone recordings)
-    - **MP3** 
-    - **FLAC**
-    - **OGG**
-    - **AAC**
-    - **WMA**
-    
-    ### 📊 Model Specifications:
-    - **Architecture:** DeepSpeech 2
-    - **Training Data:** LJSpeech dataset
-    - **Language:** English only
-    - **Vocabulary:** 31 English characters
-    - **Sample Rate:** 16kHz (auto-converted)
-    
-    ### 💡 Tips for Best Results:
-    1. **Speak clearly** and at moderate pace
-    2. **Use good quality** recordings
-    3. **Record in quiet** environment
-    4. **Ideal duration:** 3-10 seconds
-    5. **M4A files** from iPhone work great!
-    """)
-
 # Installation instructions
-with st.expander("🔧 Installation Requirements"):
+with st.expander("🔧 Installation & Troubleshooting"):
     st.markdown("""
     ### Required Packages:
     ```bash
-    pip install streamlit tensorflow numpy librosa soundfile scipy
+    pip install streamlit tensorflow numpy pydub librosa soundfile scipy
     ```
+    
+    ### For M4A Support (Required):
+    **Option 1: Install FFmpeg (Recommended)**
+    - **Windows:** Download from https://ffmpeg.org/download.html
+    - **Mac:** `brew install ffmpeg`
+    - **Linux:** `sudo apt install ffmpeg`
+    
+    **Option 2: Use Online Converter**
+    Convert M4A to WAV first using: https://online-audio-converter.com/
+    
+    **Option 3: Manual Conversion**
+    Use VLC media player or Audacity to convert to WAV format
     """)
 
 # Footer
