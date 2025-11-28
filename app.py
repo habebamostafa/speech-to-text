@@ -45,6 +45,7 @@ st.markdown('<h1 class="main-header">🎤 نظام التعرف على الكل�
 import os
 st.write("Current directory:", os.getcwd())
 st.write("Files in directory:", os.listdir())
+st.write("Model size:", os.path.getsize("my_model.h5"))
 
 # تحميل النموذج تلقائياً
 @st.cache_resource
